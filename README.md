@@ -1,82 +1,121 @@
 # SimuSIGW
-Simulation code of Scalar-Induced Gravitational Waves. Version 0.1.0 can only treat adiabatic initial conditions and a radiation-dominated era. The upcoming new version will have the ability to treat isocurvature perturbation and varying equation of state. 
 
-If you have used or modified the code, please at least cite arXiv:2508.10812.
+Small numerical package for evolving scalar-induced gravitational-wave source
+fields on periodic 3-D grids.
 
-# other info
+## Backends
 
-## Files
+- `run_evolution`: CPU FFT pseudospectral backend.
+- `run_evolution_fd`: CPU Numba finite-difference backend, with
+  `fd_order=2` or `fd_order=4`.
+- `run_evolution_torch`: optional PyTorch dense Fourier-matrix backend for the
+  original GPU-style calculation.
+- `run_evolution_torch_fft`: optional PyTorch FFT pseudospectral backend.
 
-- `fields.py`: initial Gaussian and non-Gaussian random fields.
-- `fft_cpu.py`: CPU-parallel FFT pseudospectral evolution for one parameter point.
-- `fd_cpu.py`: Numba-parallel second- and fourth-order finite-difference evolution.
-- `torch_gpu.py`: optional dense-matrix and FFT PyTorch backends.
-- `spectrum.py`: vectorized TT projection and GW spectrum calculation.
-
-## Quick Run
-
-```bash
-python run_leapfrog_cpu_parallel.py
-```
-
-To compare worker counts on the current machine:
+## Install
 
 ```bash
-python benchmark_leapfrog_workers.py
+pip install -e .
 ```
 
-To compare the FFT and finite-difference evolution backends:
+For the optional PyTorch backend, install a PyTorch build that matches your
+CUDA setup. If you use the package metadata extra:
 
 ```bash
-python benchmark_leapfrog_backends.py
+pip install -e ".[gpu]"
 ```
 
-The important knob for single-run CPU parallelism is `workers` in
-`EvolutionConfig`. It controls a thread pool for independent FFT tasks inside
-one parameter point. Use `workers=-1` for all available CPU workers, or set a
-fixed number such as `workers=8`.
+## Custom Model
 
-`fft_workers` is passed to each individual SciPy FFT and defaults to `1`. Keep
-it at `1` on machines where changing SciPy's FFT workers does not affect CPU
-usage; increase it only if a direct FFT benchmark shows that it helps.
-
-The finite-difference backend is available as `run_evolution_fd`. It supports
-periodic second- and fourth-order central differences through
-`EvolutionConfig(fd_order=2)` or `EvolutionConfig(fd_order=4)`. It should make
-CPU worker counts more visible, but it is not spectrally accurate, so compare
-convergence against the FFT backend before using production data.
-
-For exploratory runs, `EvolutionConfig(dtype=np.float32)` often speeds up the
-finite-difference backend because the stencil kernels move less memory. Use
-`np.float64` for reference runs and compare spectra before trusting single
-precision.
-
-Initial conditions are customizable:
+Users provide a dimensional power spectrum function `power_spectrum(k)` and,
+optionally, a non-Gaussian transform `non_gaussian_transform(zeta_g)`.
 
 ```python
-field_g, phi = gaussian_random_fields(
-    n,
+import numpy as np
+
+from SimuSIGW import (
+    EvolutionConfig,
+    gaussian_random_fields,
+    run_evolution_fd,
+)
+
+
+def my_power_spectrum(k):
+    kstar = 20.0
+    width = 0.1
+    amplitude = 1e-2
+    return (
+        amplitude
+        * (1 / kstar) ** 3
+        / (np.sqrt(2 * np.pi) * width)
+        * np.exp(-((k / kstar - 1) ** 2) / (2 * width**2))
+        * (2 * np.pi**2)
+    )
+
+
+def my_non_gaussian_transform(zeta_g):
+    return zeta_g + 0.5 * (zeta_g**2 - np.mean(zeta_g**2))
+
+
+config = EvolutionConfig(
+    n=128,
+    max_steps=1000,
+    output_every=1000,
+    output_path="log/custom_run",
+    workers=-1,
+    fd_order=4,
+    save_initial=False,
+)
+
+field_g, phi_initial = gaussian_random_fields(
+    config.n,
     power_spectrum=my_power_spectrum,
     non_gaussian_transform=my_non_gaussian_transform,
+    seed=1234,
+    workers=config.workers,
+    dtype=config.dtype,
+)
+
+final_state = run_evolution_fd(phi_initial, config)
+```
+
+The default non-Gaussian transform is the logarithmic transform used in the
+original notebook. For exploratory finite-difference runs, `dtype=np.float32`
+can be faster; use `np.float64` for reference runs.
+
+## GPU Backend
+
+```python
+from SimuSIGW import run_evolution_torch
+
+final_state = run_evolution_torch(phi_initial, config, device="cuda")
+```
+
+The dense backend follows the original Fourier differentiation-matrix approach.
+For larger grids, prefer the FFT backend:
+
+```python
+from SimuSIGW import run_evolution_torch_fft
+
+config = EvolutionConfig(...)
+final_state = run_evolution_torch_fft(
+    phi_initial,
+    config,
+    device="cuda",
+    dtype=np.float32,  # or np.float64
 )
 ```
 
-The optional dense GPU backend is exposed as `run_evolution_torch(phi, config,
-device="cuda")`; the FFT PyTorch backend is exposed as
-`run_evolution_torch_fft(phi, config, device="cuda")`. PyTorch is imported only
-when one of these functions is called.  They clear PyTorch's CUDA cache at the
-end by default.  You can also call `clear_torch_cache("cuda")` manually after
-custom GPU work.
-
 Both PyTorch backends accept `dtype=np.float32` or `dtype=np.float64`. If
-omitted, they use `EvolutionConfig(dtype=...)`. Use `np.float32` for speed and
-lower GPU memory use, or `np.float64` for reference runs. The torch benchmark
-accepts the same choice:
+omitted, they use `config.dtype`. Choose `np.float32` for speed and lower GPU
+memory use, or `np.float64` for reference runs. They are optional and import
+PyTorch only when called.
+
+## Benchmarks
 
 ```bash
+python benchmark_leapfrog_workers.py
+python benchmark_leapfrog_backends.py
 python benchmark_torch_backends.py --dtype float32
 python benchmark_torch_backends.py --dtype float64 --skip-dense
 ```
-
-The physical box convention is unchanged from the notebook: the box length is
-`space_length * pi`, and the default time step is `space_length / n / 5`.
