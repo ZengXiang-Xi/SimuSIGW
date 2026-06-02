@@ -1,7 +1,7 @@
 # SimuSIGW
 
 Small numerical package for evolving scalar-induced gravitational-wave source
-fields on periodic 3-D grids.
+fields on periodic 3-D grids. Version 0.1.0 can only treat adiabatic initial conditions and a radiation-dominated era. The upcoming new version will have the ability to treat isocurvature perturbation and varying equation of state. If you have used or modified the code, please cite arXiv:2508.10812.
 
 ## Backends
 
