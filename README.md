@@ -14,6 +14,13 @@ fields on periodic 3-D grids. Version 0.1.0 can only treat adiabatic initial con
 
 ## Install
 
+You can directly use pip now
+
+```bash
+pip install SimuSIGW
+```
+Or you can 
+
 ```bash
 pip install -e .
 ```
